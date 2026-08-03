@@ -10,6 +10,8 @@ import (
 	"github.com/free5gc/ike/message"
 	"github.com/free5gc/n3iwf/internal/context"
 	"github.com/free5gc/n3iwf/internal/logger"
+	"os/exec"
+	"strings"
 )
 
 type XFRMEncryptionAlgorithmType uint16
@@ -236,6 +238,7 @@ func SetupIPsecXfrmi(xfrmIfaceName, parentIfaceName string, xfrmIfaceId uint32,
 		return nil, err
 	}
 
+	disableGRO(xfrmIfaceName)
 	return xfrmi, nil
 }
 
@@ -250,4 +253,15 @@ func getTruncateLength(transformID uint16) int {
 	default:
 		return 96
 	}
+}
+
+func disableGRO(ifaceName string) {
+	ikeLog := logger.IKELog
+	out, err := exec.Command("ethtool", "-K", ifaceName, "gro", "off").CombinedOutput()
+	if err != nil {
+		ikeLog.Warnf("disable GRO on %s failed: %v (%s)",
+			ifaceName, err, strings.TrimSpace(string(out)))
+		return
+	}
+	ikeLog.Infof("GRO disabled on %s", ifaceName)
 }

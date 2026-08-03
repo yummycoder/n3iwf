@@ -133,7 +133,7 @@ func (s *Server) greListenAndServe(wg *sync.WaitGroup) {
 		copy(forwardData, buf)
 
 		wg.Add(1)
-		go s.forwardUL(src.String(), cm.IfIndex, forwardData, wg)
+		s.forwardUL(src.String(), cm.IfIndex, forwardData, wg)
 	}
 }
 

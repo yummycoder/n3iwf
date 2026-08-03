@@ -27,3 +27,7 @@ cscope.*
 # Debug
 *.log
 *.pcap
+n3iwf
+*.orig
+*.log
+*.perf
