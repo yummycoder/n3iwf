@@ -31,3 +31,5 @@ n3iwf
 *.orig
 *.log
 *.perf
+config/n3iwfcfg.yaml
+config/cert/
