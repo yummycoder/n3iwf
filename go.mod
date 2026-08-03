@@ -69,4 +69,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/wmnsk/go-gtp => /home/ubuntu/go-gtp-local
+replace github.com/wmnsk/go-gtp => github.com/yummycoder/go-gtp v0.0.0-20260803101242-911236cfbf16
