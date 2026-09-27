@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -154,6 +155,7 @@ type Configuration struct {
 	Certificate          string              `yaml:"certificate"          valid:"optional"`
 	LivenessCheck        *TimerValue         `yaml:"livenessCheck"        valid:"required"`
 	ChildSARekey         *ChildSARekeyConfig `yaml:"childSARekey,omitempty" valid:"optional"`
+	MnAnchoredSN         *MnAnchoredSN       `yaml:"mnAnchoredSN,omitempty" valid:"optional"`
 }
 
 type Logger struct {
@@ -202,6 +204,30 @@ func (c *ChildSARekeyConfig) validate() error {
 		return errors.New("childSARekey.maxRetransmits must not exceed 10")
 	}
 	return nil
+}
+
+type MnAnchoredSN struct {
+	Enable    bool   `yaml:"enable" valid:"optional"`
+	Kn3iwfHex string `yaml:"kn3iwfHex,omitempty" valid:"optional,hexadecimal"`
+}
+
+func (c *Config) MnAnchoredSNEnabled() bool {
+	c.RLock()
+	defer c.RUnlock()
+	return c.Configuration != nil && c.Configuration.MnAnchoredSN != nil && c.Configuration.MnAnchoredSN.Enable
+}
+
+func (c *Config) GetMnAnchoredKn3iwf() []byte {
+	c.RLock()
+	defer c.RUnlock()
+	if c.Configuration == nil || c.Configuration.MnAnchoredSN == nil {
+		return nil
+	}
+	k, err := hex.DecodeString(c.Configuration.MnAnchoredSN.Kn3iwfHex)
+	if err != nil {
+		return nil
+	}
+	return k
 }
 
 func appendInvalid(err error) error {

@@ -631,6 +631,28 @@ func (s *Server) HandleIKEAUTH(
 		ikeLog.Info("Received traffic selector initiator from UE")
 		ikeSecurityAssociation.TrafficSelectorResponder = trafficSelectorResponder
 
+		if cfg.MnAnchoredSNEnabled() && authentication != nil {
+			// MN-anchored single-round IKE_AUTH (no EAP): the UE's message already
+			// carries IDi(SUPI)+SA+TSi+TSr+AUTH+CFG, and the SUPI IDi is already
+			// folded into InitiatorSignedOctets above. Allocate the UE context,
+			// key it from the delivered K_N3IWF_SN, advance to PostSignalling and
+			// re-dispatch this same message so PostSignalling verifies AUTH and
+			// completes the CP child SA. No NGAP/EAP relay is used.
+			kn3iwf := cfg.GetMnAnchoredKn3iwf()
+			if len(kn3iwf) != 32 {
+				ikeLog.Errorf("MN-anchored SN: no/invalid K_N3IWF_SN in config")
+				return
+			}
+			ikeUe := n3iwfCtx.NewN3iwfIkeUe(ikeSecurityAssociation.LocalSPI)
+			ikeSecurityAssociation.IkeUE = ikeUe
+			ikeUe.N3IWFIKESecurityAssociation = ikeSecurityAssociation
+			ikeUe.IKEConnection = ikeSecurityAssociation.IKEConnection
+			ikeUe.Kn3iwf = kn3iwf
+			ikeSecurityAssociation.State = PostSignalling
+			s.HandleIKEAUTH(udpConn, n3iwfAddr, ueAddr, message, ikeSecurityAssociation)
+			return
+		}
+
 		responseIKEPayload.Reset()
 		// Identification
 		responseIKEPayload.BuildIdentificationResponder(ike_message.ID_FQDN, []byte(cfg.GetFQDN()))
