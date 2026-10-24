@@ -638,9 +638,18 @@ func (s *Server) HandleIKEAUTH(
 			// key it from the delivered K_N3IWF_SN, advance to PostSignalling and
 			// re-dispatch this same message so PostSignalling verifies AUTH and
 			// completes the CP child SA. No NGAP/EAP relay is used.
-			kn3iwf := cfg.GetMnAnchoredKn3iwf()
+			supi := ""
+			if initiatorID != nil {
+				supi = string(initiatorID.IDData)
+			}
+			var kn3iwf []byte
+			if e := snLookup(supi); e != nil {
+				kn3iwf = e.kn3iwf
+			} else {
+				kn3iwf = cfg.GetMnAnchoredKn3iwf()
+			}
 			if len(kn3iwf) != 32 {
-				ikeLog.Errorf("MN-anchored SN: no/invalid K_N3IWF_SN in config")
+				ikeLog.Errorf("MN-anchored SN: no K_N3IWF_SN for SUPI %q (no SN-Add, no config)", supi)
 				return
 			}
 			ikeUe := n3iwfCtx.NewN3iwfIkeUe(ikeSecurityAssociation.LocalSPI)
@@ -648,6 +657,9 @@ func (s *Server) HandleIKEAUTH(
 			ikeUe.N3IWFIKESecurityAssociation = ikeSecurityAssociation
 			ikeUe.IKEConnection = ikeSecurityAssociation.IKEConnection
 			ikeUe.Kn3iwf = kn3iwf
+			ikeUe.MnAnchored = true
+			ikeUe.MnUeId = AllocateMnUeId()
+			ikeUe.MnSupi = supi
 			ikeSecurityAssociation.State = PostSignalling
 			s.HandleIKEAUTH(udpConn, n3iwfAddr, ueAddr, message, ikeSecurityAssociation)
 			return
@@ -1058,6 +1070,24 @@ func (s *Server) HandleIKEAUTH(
 			return
 		}
 
+		if ikeUE != nil && ikeUE.MnAnchored {
+			// MN-anchored: ensure IKEConnection is populated (EAP path is skipped)
+			if ikeSecurityAssociation.IKEConnection == nil {
+				ikeSecurityAssociation.IKEConnection = &n3iwf_context.UDPSocketInfo{
+					Conn:      udpConn,
+					N3IWFAddr: n3iwfAddr,
+					UEAddr:    ueAddr,
+				}
+				ikeUE.IKEConnection = ikeSecurityAssociation.IKEConnection
+			}
+			if p := s.mnParamsFor(ikeUE); p != nil {
+				ikeLog.Infof("MN-anchored SN: driving PDU session %d (QFIs=%v UL-TEID=%d UPF=%s)",
+					p.PDUSessionID, p.QFIs, p.UplinkTEID, p.UPFN3Address)
+				s.SetupMnAnchoredPDUSession(ikeUE, p)
+			}
+			return
+		}
+
 		ranNgapId, ok := n3iwfCtx.NgapIdLoad(ikeUE.N3IWFIKESecurityAssociation.LocalSPI)
 		if !ok {
 			ikeLog.Errorf("Cannot get RanNgapId from SPI : %+v",
@@ -1178,6 +1208,11 @@ func (s *Server) HandleCREATECHILDSA(
 		TrafficSelectorResponder: trafficSelectorResponder,
 	}
 
+	if ikeSecurityAssociation.IkeUE != nil && ikeSecurityAssociation.IkeUE.MnAnchored {
+		s.continueCreateChildSA(ikeSecurityAssociation, ikeSecurityAssociation.IkeUE.MnTempPDUSessionSetupData)
+		return
+	}
+
 	ranNgapId, ok := n3iwfCtx.NgapIdLoad(ikeSecurityAssociation.LocalSPI)
 	if !ok {
 		ikeLog.Errorf("Cannot get RanNgapID from SPI : %+v",
@@ -1284,11 +1319,17 @@ func (s *Server) continueCreateChildSA(
 		childSecurityAssociationContext.NATPort = ikeConnection.UEAddr.Port
 	}
 
-	ranNgapId, ok := n3iwfCtx.NgapIdLoad(ikeSecurityAssociation.LocalSPI)
-	if !ok {
-		ikeLog.Errorf("Cannot get RanNgapId from SPI : %+v",
-			ikeSecurityAssociation.LocalSPI)
-		return
+	var ranNgapId int64
+	if ikeUe.MnAnchored {
+		ranNgapId = ikeUe.MnUeId
+	} else {
+		var ok bool
+		ranNgapId, ok = n3iwfCtx.NgapIdLoad(ikeSecurityAssociation.LocalSPI)
+		if !ok {
+			ikeLog.Errorf("Cannot get RanNgapId from SPI : %+v",
+				ikeSecurityAssociation.LocalSPI)
+			return
+		}
 	}
 
 	childSecurityAssociationContext.LocalIsInitiator = true
@@ -1307,8 +1348,15 @@ func (s *Server) continueCreateChildSA(
 		return
 	}
 	s.scheduleChildSARekey(childSecurityAssociationContext)
+	if ikeUe.MnAnchored {
+		pdu := temporaryPDUSessionSetupData.UnactivatedPDUSession[temporaryPDUSessionSetupData.Index-1]
+		snComplete(ikeUe.MnSupi, pdu.GTPConnInfo.IncomingTEID,
+			s.Config().GetN3iwfGtpBindAddress(), ikeUe.IPSecInnerIP.String())
+	}
 	// Forward PDU Seesion Establishment Accept to UE
-	s.SendNgapEvt(n3iwf_context.NewSendNASMsgEvt(ranNgapId))
+	if !ikeUe.MnAnchored {
+		s.SendNgapEvt(n3iwf_context.NewSendNASMsgEvt(ranNgapId))
+	}
 
 	temporaryPDUSessionSetupData.FailedErrStr = append(temporaryPDUSessionSetupData.FailedErrStr, n3iwf_context.ErrNil)
 
@@ -1708,11 +1756,17 @@ func (s *Server) CreatePDUSessionChildSA(
 
 	ikeSecurityAssociation := ikeUe.N3IWFIKESecurityAssociation
 
-	ranNgapId, ok := n3iwfCtx.NgapIdLoad(ikeUe.N3IWFIKESecurityAssociation.LocalSPI)
-	if !ok {
-		ikeLog.Errorf("Cannot get RanNgapId from SPI : %+v",
-			ikeUe.N3IWFIKESecurityAssociation.LocalSPI)
-		return
+	var ranNgapId int64
+	if ikeUe.MnAnchored {
+		ranNgapId = ikeUe.MnUeId
+	} else {
+		var ok bool
+		ranNgapId, ok = n3iwfCtx.NgapIdLoad(ikeUe.N3IWFIKESecurityAssociation.LocalSPI)
+		if !ok {
+			ikeLog.Errorf("Cannot get RanNgapId from SPI : %+v",
+				ikeUe.N3IWFIKESecurityAssociation.LocalSPI)
+			return
+		}
 	}
 
 	for {
@@ -1839,7 +1893,9 @@ func (s *Server) CreatePDUSessionChildSA(
 				break
 			}
 		} else {
-			s.SendNgapEvt(n3iwf_context.NewSendPDUSessionResourceSetupResEvt(ranNgapId))
+			if !ikeUe.MnAnchored {
+				s.SendNgapEvt(n3iwf_context.NewSendPDUSessionResourceSetupResEvt(ranNgapId))
+			}
 			break
 		}
 	}
@@ -2360,4 +2416,47 @@ func hasOtherChildSAForPDUSession(
 		}
 	}
 	return false
+}
+
+// --- MN-anchored SN role (N3IWF-as-SN, no NGAP association) ---
+
+type MnAnchoredSessionParams struct {
+	PDUSessionID          uint32
+	QFIs                  []uint8
+	UplinkTEID            uint32
+	UPFN3Address          string
+	SecurityCipher        bool
+	SecurityIntegrity     bool
+	AllocatedDownlinkTEID uint32
+}
+
+var mnN3TEIDCounter uint32
+var mnUeIdCounter int64
+
+func AllocateMnUeId() int64 { return atomic.AddInt64(&mnUeIdCounter, 1) }
+func nextMnN3TEID() uint32  { return atomic.AddUint32(&mnN3TEIDCounter, 1) }
+
+func (s *Server) SetupMnAnchoredPDUSession(ikeUe *n3iwf_context.N3IWFIkeUe, p *MnAnchoredSessionParams) {
+	pdu := &n3iwf_context.PDUSession{
+		Id:                int64(p.PDUSessionID),
+		SecurityCipher:    p.SecurityCipher,
+		SecurityIntegrity: p.SecurityIntegrity,
+		QFIList:           append([]uint8(nil), p.QFIs...),
+		QosFlows:          make(map[int64]*n3iwf_context.QosFlow, len(p.QFIs)),
+		GTPConnInfo: &n3iwf_context.GTPConnectionInfo{
+			UPFIPAddr:    p.UPFN3Address,
+			OutgoingTEID: p.UplinkTEID,
+			IncomingTEID: nextMnN3TEID(),
+		},
+	}
+	for _, qfi := range p.QFIs {
+		pdu.QosFlows[int64(qfi)] = &n3iwf_context.QosFlow{Identifier: int64(qfi)}
+	}
+	p.AllocatedDownlinkTEID = pdu.GTPConnInfo.IncomingTEID
+	tmp := &n3iwf_context.PDUSessionSetupTemporaryData{
+		UnactivatedPDUSession: []*n3iwf_context.PDUSession{pdu},
+		Index:                 0,
+	}
+	ikeUe.MnTempPDUSessionSetupData = tmp
+	s.CreatePDUSessionChildSA(ikeUe, tmp)
 }

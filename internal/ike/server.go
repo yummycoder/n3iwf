@@ -103,6 +103,8 @@ func (s *Server) Run(wg *sync.WaitGroup) error {
 	wg.Add(1)
 	go s.server(wg)
 
+	go s.serveSNControl()
+
 	return nil
 }
 

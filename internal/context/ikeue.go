@@ -19,7 +19,11 @@ const (
 )
 
 type N3IWFIkeUe struct {
-	N3iwfCtx *N3IWFContext
+	MnAnchored                bool
+	MnUeId                    int64
+	MnTempPDUSessionSetupData *PDUSessionSetupTemporaryData
+	MnSupi                    string
+	N3iwfCtx                  *N3IWFContext
 
 	// UE identity
 	IPSecInnerIP     net.IP

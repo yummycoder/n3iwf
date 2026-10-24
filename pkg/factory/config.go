@@ -149,6 +149,7 @@ type Configuration struct {
 	XfrmIfaceId          uint32              `yaml:"xfrmInterfaceID"      valid:"optional"`                    // must != 0
 	N3IWFGTPBindAddress  string              `yaml:"n3iwfGtpBindAddress"  valid:"required,host"`
 	N3IWFDPControlSocket string              `yaml:"n3iwfDpControlSocket" valid:"optional"`
+	SNControlSocket      string              `yaml:"snControlSocket" valid:"optional"`
 	FQDN                 string              `yaml:"fqdn"                 valid:"required,host"` // e.g. n3iwf.Saviah.com
 	PrivateKey           string              `yaml:"privateKey"           valid:"optional"`
 	CertificateAuthority string              `yaml:"certificateAuthority" valid:"optional"`
@@ -207,8 +208,9 @@ func (c *ChildSARekeyConfig) validate() error {
 }
 
 type MnAnchoredSN struct {
-	Enable    bool   `yaml:"enable" valid:"optional"`
-	Kn3iwfHex string `yaml:"kn3iwfHex,omitempty" valid:"optional,hexadecimal"`
+	Enable      bool                   `yaml:"enable" valid:"optional"`
+	Kn3iwfHex   string                 `yaml:"kn3iwfHex,omitempty" valid:"optional,hexadecimal"`
+	TestSession *MnAnchoredTestSession `yaml:"testSession,omitempty" valid:"optional"`
 }
 
 func (c *Config) MnAnchoredSNEnabled() bool {
@@ -635,4 +637,27 @@ func (c *Config) GetMetricsNamespace() string {
 		return c.Configuration.Metrics.Namespace
 	}
 	return N3iwfMetricsDefaultNamespace
+}
+
+type MnAnchoredTestSession struct {
+	PDUSessionID      uint32 `yaml:"pduSessionID" valid:"optional"`
+	QFIs              []int  `yaml:"qfis" valid:"optional"`
+	UplinkTEID        uint32 `yaml:"uplinkTEID" valid:"optional"`
+	UPFN3Address      string `yaml:"upfN3Address" valid:"optional"`
+	SecurityIntegrity bool   `yaml:"securityIntegrity" valid:"optional"`
+	SecurityCipher    bool   `yaml:"securityCipher" valid:"optional"`
+}
+
+func (c *Config) GetMnAnchoredTestSession() *MnAnchoredTestSession {
+	if c.Configuration == nil || c.Configuration.MnAnchoredSN == nil {
+		return nil
+	}
+	return c.Configuration.MnAnchoredSN.TestSession
+}
+
+func (c *Config) GetSNControlSocket() string {
+	if c.Configuration != nil && c.Configuration.SNControlSocket != "" {
+		return c.Configuration.SNControlSocket
+	}
+	return "/run/l25gc/n3iwf-sn.sock"
 }
