@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	n3iwfdp "github.com/nycu-ucr/l25gc-n3iwf-dp-client"
+	n3iwfup "github.com/nycu-ucr/l25gc-n3iwf-up-client"
 )
 
 type fakeControlClient struct {
@@ -26,7 +26,7 @@ func (f *fakeControlClient) Hello(context.Context) error {
 func (f *fakeControlClient) UpsertSession(
 	_ context.Context,
 	generation uint64,
-	_ n3iwfdp.Session,
+	_ n3iwfup.Session,
 ) error {
 	f.upsertCalls++
 	f.lastGeneration = generation
@@ -44,7 +44,7 @@ func (f *fakeControlClient) DeleteSession(
 	return nil
 }
 func (f *fakeControlClient) UpsertChildSA(_ context.Context, generation uint64,
-	_ n3iwfdp.ChildSA) error {
+	_ n3iwfup.ChildSA) error {
 	f.upsertCalls++
 	f.lastGeneration = generation
 	return nil
@@ -61,9 +61,12 @@ func (f *fakeControlClient) Close() error {
 	return nil
 }
 
-func TestNewRequiresControlSocket(t *testing.T) {
+func TestNewRequiresControlName(t *testing.T) {
 	if _, err := New(""); err == nil {
-		t.Fatal("empty control socket accepted")
+		t.Fatal("empty control name accepted")
+	}
+	if _, err := NewWithOptions(ControlOptions{}); err == nil {
+		t.Fatal("empty control name accepted with options")
 	}
 }
 

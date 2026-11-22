@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	lib_ngap "github.com/free5gc/ngap"
 	"github.com/free5gc/sctp"
 	"github.com/free5gc/util/safe_channel"
+	n2 "github.com/nycu-ucr/l25gc-n2-transport"
 )
 
 const (
@@ -36,13 +38,15 @@ type n3iwf interface {
 type Server struct {
 	n3iwf
 
-	conn     []*sctp.SCTPConn
+	conn     []net.Conn
+	shm      *n2.Endpoint
 	rcvPktCh *safe_channel.SafeCh[ReceiveNGAPPacket]
 	rcvEvtCh *safe_channel.SafeCh[n3iwf_context.NgapEvt]
 }
 
 type ReceiveNGAPPacket struct {
-	Conn *sctp.SCTPConn
+	Conn net.Conn
+	Err  error
 	Buf  []byte
 }
 
@@ -60,6 +64,14 @@ func (s *Server) Run(wg *sync.WaitGroup) error {
 	// n3iwf context
 	cfg := s.Config()
 
+	if cfg.Configuration.N2Transport == "sctp-shm" {
+		if err := s.startSharedMemory(wg); err != nil {
+			return err
+		}
+		wg.Add(1)
+		go s.runNgapEventHandler(wg)
+		return nil
+	}
 	localAddr := cfg.GetLocalSctpAddr()
 
 	for _, remoteAddr := range cfg.GetAmfSctpAddrs() {
@@ -96,6 +108,18 @@ func (s *Server) runNgapEventHandler(wg *sync.WaitGroup) {
 	for {
 		select {
 		case rcvPkt := <-rcvPktCh:
+			if rcvPkt.Err != nil && rcvPkt.Conn != nil {
+				key := rcvPkt.Conn.RemoteAddr().String()
+				if amf, ok := s.Context().AMFPoolLoad(key); ok {
+					for _, ue := range amf.N3iwfRanUeList {
+						if err := s.releaseIkeUeAndRanUe(ue); err != nil {
+							ngapLog.Errorf("N2 disconnect UE/user-plane cleanup: %v", err)
+						}
+					}
+					s.Context().DeleteN3iwfAmf(key)
+				}
+				ngapLog.Errorf("N2 SCTP/shared-memory association closed: %v; restart both endpoints before re-registration", rcvPkt.Err)
+			}
 			if len(rcvPkt.Buf) == 0 { // receiver closed
 				return
 			}
@@ -228,6 +252,9 @@ func (s *Server) SendNgapEvt(evt n3iwf_context.NgapEvt) {
 func (s *Server) Stop() {
 	ngapLog := logger.NgapLog
 	ngapLog.Infof("Close NGAP server....")
+	if s.shm != nil {
+		_ = s.shm.Close()
+	}
 
 	for _, ngapServerConn := range s.conn {
 		if err := ngapServerConn.Close(); err != nil {
